@@ -1,0 +1,1625 @@
+--[[
+    ╔═══════════════════════════════════════╗
+    ║   CLAUDE  •  The Strongest Battlegrounds
+    ║   Для Delta (Android) и ПК
+    ╚═══════════════════════════════════════╝
+]]
+
+-- ========== СЕРВИСЫ ==========
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local Workspace = game:GetService("Workspace")
+local StatsService = game:GetService("Stats")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ========== ЗАЩИТА ОТ ПОВТОРНОГО ЗАПУСКА ==========
+local env = (getgenv and getgenv()) or _G
+
+-- Если скрипт уже запущен — полностью выгружаем старую копию
+if env.ClaudeTSB and type(env.ClaudeTSB.Unload) == "function" then
+    pcall(env.ClaudeTSB.Unload)
+end
+
+local Claude = { Connections = {}, Cleanups = {}, Gui = nil, Folder = nil }
+env.ClaudeTSB = Claude
+
+-- Запоминаем соединение, чтобы отключить его при выгрузке
+local function track(conn)
+    Claude.Connections[#Claude.Connections + 1] = conn
+    return conn
+end
+
+-- Запоминаем функцию очистки
+local function onCleanup(fn)
+    Claude.Cleanups[#Claude.Cleanups + 1] = fn
+end
+
+function Claude.Unload()
+    for _, fn in ipairs(Claude.Cleanups) do
+        pcall(fn)
+    end
+    for _, c in ipairs(Claude.Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    Claude.Connections = {}
+    Claude.Cleanups = {}
+    if Claude.Gui then pcall(function() Claude.Gui:Destroy() end) end
+    if Claude.Folder then pcall(function() Claude.Folder:Destroy() end) end
+    Claude.Gui = nil
+    Claude.Folder = nil
+    if env.ClaudeTSB == Claude then
+        env.ClaudeTSB = nil
+    end
+end
+
+-- ========== ТЕМА И ХЕЛПЕРЫ ==========
+local C = {
+    bg = Color3.fromRGB(13, 13, 18),
+    panel = Color3.fromRGB(20, 20, 28),
+    item = Color3.fromRGB(28, 28, 39),
+    off = Color3.fromRGB(58, 58, 74),
+    accent = Color3.fromRGB(217, 119, 87),
+    accent2 = Color3.fromRGB(245, 168, 122),
+    text = Color3.fromRGB(240, 240, 245),
+    dim = Color3.fromRGB(145, 145, 165),
+    danger = Color3.fromRGB(190, 65, 65),
+}
+
+-- Быстрое создание инстансов
+local function new(class, props, parent)
+    local o = Instance.new(class)
+    for k, v in pairs(props or {}) do
+        o[k] = v
+    end
+    if parent then o.Parent = parent end
+    return o
+end
+
+local function corner(o, r)
+    return new("UICorner", { CornerRadius = UDim.new(0, r) }, o)
+end
+
+local function stroke(o, color, thickness, transparency)
+    return new("UIStroke", {
+        Color = color,
+        Thickness = thickness or 1,
+        Transparency = transparency or 0,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, o)
+end
+
+local function tween(obj, t, props, style, dir)
+    local tw = TweenService:Create(
+        obj,
+        TweenInfo.new(t, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out),
+        props
+    )
+    tw:Play()
+    return tw
+end
+
+-- Нумерация порядка элементов на странице
+local orders = {}
+local function ord(page)
+    orders[page] = (orders[page] or 0) + 1
+    return orders[page]
+end
+
+-- ========== ГЛАВНЫЙ GUI ==========
+local gui = Instance.new("ScreenGui")
+gui.Name = "ClaudeTSB"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+-- Пытаемся спрятать GUI (gethui -> CoreGui -> PlayerGui)
+local parented = pcall(function()
+    if gethui then
+        gui.Parent = gethui()
+    else
+        gui.Parent = game:GetService("CoreGui")
+    end
+end)
+if not parented or not gui.Parent then
+    gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+Claude.Gui = gui
+
+-- Папка для ESP-объектов (рядом с GUI)
+Claude.Folder = new("Folder", { Name = "ClaudeESP" }, gui.Parent)
+
+-- ========== УВЕДОМЛЕНИЯ ==========
+local function notify(text)
+    if not Claude.Gui then return end
+    local f = new("Frame", {
+        Size = UDim2.new(0, 290, 0, 40),
+        AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(0.5, 0, 0, -60),
+        BackgroundColor3 = C.panel,
+        BorderSizePixel = 0,
+        ZIndex = 100,
+    }, Claude.Gui)
+    corner(f, 10)
+    stroke(f, C.accent, 1.2, 0.2)
+    new("TextLabel", {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -16, 1, 0),
+        Position = UDim2.new(0, 8, 0, 0),
+        Text = text,
+        TextColor3 = C.text,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 14,
+        TextWrapped = true,
+        ZIndex = 101,
+    }, f)
+    tween(f, 0.4, { Position = UDim2.new(0.5, 0, 0, 16) }, Enum.EasingStyle.Back)
+    task.delay(2.4, function()
+        if f.Parent then
+            tween(f, 0.3, { Position = UDim2.new(0.5, 0, 0, -60) }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            task.wait(0.35)
+            pcall(function() f:Destroy() end)
+        end
+    end)
+end
+
+-- ========== ФУНКЦИИ (ЛОГИКА) ==========
+local S = {
+    Speed = false, SpeedValue = 40,
+    Jump = false, JumpValue = 70,
+    InfJump = false,
+    Noclip = false,
+    Fly = false, FlySpeed = 60,
+    ESP = false, ESPInfo = true,
+    Fullbright = false,
+    FOVOn = false, FOV = 70,
+    CamLock = false, CamLockRange = 60, CamLockSmooth = 0.3,
+    AntiAFK = true,
+}
+
+local function getHum()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function getRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+-- --- Скорость и прыжок ---
+track(RunService.Heartbeat:Connect(function()
+    local hum = getHum()
+    if hum then
+        if S.Speed then
+            hum.WalkSpeed = S.SpeedValue
+        end
+        if S.Jump then
+            hum.UseJumpPower = true
+            hum.JumpPower = S.JumpValue
+        end
+    end
+end))
+
+-- --- Бесконечный прыжок ---
+track(UserInputService.JumpRequest:Connect(function()
+    if S.InfJump then
+        local hum = getHum()
+        if hum then
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end))
+
+-- --- Ноклип ---
+track(RunService.Stepped:Connect(function()
+    if S.Noclip then
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end
+end))
+
+-- --- Полёт ---
+local flyBV = nil
+local flyKeyUp, flyKeyDown = false, false
+local flyBtnUp, flyBtnDown = false, false
+
+local function stopFly()
+    if flyBV then
+        pcall(function() flyBV:Destroy() end)
+        flyBV = nil
+    end
+    local hum = getHum()
+    if hum then hum.PlatformStand = false end
+end
+
+local function startFly()
+    local root = getRoot()
+    local hum = getHum()
+    if not root or not hum then return end
+    if flyBV then pcall(function() flyBV:Destroy() end) end
+    flyBV = Instance.new("BodyVelocity")
+    flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    flyBV.Velocity = Vector3.zero
+    flyBV.Parent = root
+    hum.PlatformStand = true
+end
+
+local function setFly(on)
+    S.Fly = on
+    if not on then stopFly() end
+    if Claude.SetFlyPad then Claude.SetFlyPad(on) end
+end
+
+track(RunService.Heartbeat:Connect(function()
+    if not S.Fly then return end
+    local root, hum, cam = getRoot(), getHum(), Workspace.CurrentCamera
+    if not root or not hum or not cam then return end
+    if not flyBV or flyBV.Parent ~= root then
+        startFly()
+    end
+    if not flyBV then return end
+    hum.PlatformStand = true
+
+    local dir = hum.MoveDirection
+    local look = cam.CFrame.LookVector
+    local flat = Vector3.new(look.X, 0, look.Z)
+    flat = (flat.Magnitude > 0) and flat.Unit or Vector3.zero
+    local forward = dir:Dot(flat)
+
+    -- Горизонталь по джойстику + наклон по взгляду камеры
+    local vel = dir * S.FlySpeed + Vector3.new(0, look.Y * forward * S.FlySpeed, 0)
+    if flyKeyUp or flyBtnUp then vel += Vector3.new(0, S.FlySpeed, 0) end
+    if flyKeyDown or flyBtnDown then vel -= Vector3.new(0, S.FlySpeed, 0) end
+    flyBV.Velocity = vel
+end))
+
+-- Клавиши (ПК): Space — вверх, LeftCtrl — вниз, RightShift — меню
+track(UserInputService.InputBegan:Connect(function(input, gp)
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        if Claude.ToggleMenu then Claude.ToggleMenu() end
+        return
+    end
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.Space then
+        flyKeyUp = true
+    elseif input.KeyCode == Enum.KeyCode.LeftControl then
+        flyKeyDown = true
+    end
+end))
+track(UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.Space then
+        flyKeyUp = false
+    elseif input.KeyCode == Enum.KeyCode.LeftControl then
+        flyKeyDown = false
+    end
+end))
+
+-- --- Fullbright ---
+local lightOrig = nil
+local function applyFullbright(on)
+    if on then
+        if not lightOrig then
+            lightOrig = {
+                Brightness = Lighting.Brightness,
+                ClockTime = Lighting.ClockTime,
+                FogEnd = Lighting.FogEnd,
+                GlobalShadows = Lighting.GlobalShadows,
+                Ambient = Lighting.Ambient,
+                OutdoorAmbient = Lighting.OutdoorAmbient,
+            }
+        end
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 1e6
+        Lighting.GlobalShadows = false
+        Lighting.Ambient = Color3.fromRGB(178, 178, 178)
+        Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+    elseif lightOrig then
+        for k, v in pairs(lightOrig) do
+            pcall(function() Lighting[k] = v end)
+        end
+        lightOrig = nil
+    end
+end
+
+-- --- ESP ---
+local espData = {}
+
+local function removeESP(plr)
+    local d = espData[plr]
+    if d then
+        pcall(function() d.hl:Destroy() end)
+        pcall(function() d.bb:Destroy() end)
+        espData[plr] = nil
+    end
+end
+
+local function createESP(plr, char, root)
+    removeESP(plr)
+    local hl = new("Highlight", {
+        Adornee = char,
+        FillColor = C.accent,
+        OutlineColor = Color3.new(1, 1, 1),
+        FillTransparency = 0.6,
+        OutlineTransparency = 0,
+        DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+    }, Claude.Folder)
+    local bb = new("BillboardGui", {
+        Adornee = root,
+        AlwaysOnTop = true,
+        Size = UDim2.new(0, 150, 0, 34),
+        StudsOffset = Vector3.new(0, 3.4, 0),
+    }, Claude.Folder)
+    local lbl = new("TextLabel", {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 1, 0),
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+        TextColor3 = Color3.new(1, 1, 1),
+        TextStrokeTransparency = 0.4,
+        Text = "",
+    }, bb)
+    espData[plr] = { hl = hl, bb = bb, lbl = lbl, char = char }
+end
+
+track(Players.PlayerRemoving:Connect(function(plr)
+    removeESP(plr)
+end))
+
+-- Обновление ESP и Fullbright (с ограничением частоты, чтобы не грузить телефон)
+local espTimer, lightTimer = 0, 0
+track(RunService.Heartbeat:Connect(function(dt)
+    lightTimer += dt
+    if lightTimer >= 1 then
+        lightTimer = 0
+        if S.Fullbright then applyFullbright(true) end
+    end
+
+    espTimer += dt
+    if espTimer < 0.2 then return end
+    espTimer = 0
+
+    if not S.ESP then
+        if next(espData) then
+            for plr in pairs(espData) do removeESP(plr) end
+        end
+        return
+    end
+
+    local myRoot = getRoot()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local char = plr.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if root and hum then
+                local d = espData[plr]
+                if not d or d.char ~= char or not d.hl.Parent then
+                    createESP(plr, char, root)
+                    d = espData[plr]
+                end
+                if S.ESPInfo then
+                    local dist = myRoot and math.floor((root.Position - myRoot.Position).Magnitude) or 0
+                    d.lbl.Text = string.format("%s\n%dм | %d HP", plr.DisplayName, dist, math.floor(hum.Health))
+                else
+                    d.lbl.Text = ""
+                end
+            else
+                removeESP(plr)
+            end
+        end
+    end
+end))
+
+-- --- Камера-захват + FOV ---
+local camTarget = nil
+
+local function validTarget(plr, maxDist, fromPos)
+    local char = plr.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return nil end
+    if (root.Position - fromPos).Magnitude > maxDist then return nil end
+    return root
+end
+
+track(RunService.RenderStepped:Connect(function()
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+
+    if S.FOVOn then
+        cam.FieldOfView = S.FOV
+    end
+
+    if S.CamLock then
+        local myRoot = getRoot()
+        if myRoot then
+            local targetRoot = nil
+            if camTarget then
+                targetRoot = validTarget(camTarget, S.CamLockRange * 1.25, myRoot.Position)
+            end
+            if not targetRoot then
+                camTarget = nil
+                local best = math.huge
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= LocalPlayer then
+                        local r = validTarget(plr, S.CamLockRange, myRoot.Position)
+                        if r then
+                            local d = (r.Position - myRoot.Position).Magnitude
+                            if d < best then
+                                best = d
+                                camTarget = plr
+                                targetRoot = r
+                            end
+                        end
+                    end
+                end
+            end
+            if targetRoot then
+                local goal = CFrame.lookAt(cam.CFrame.Position, targetRoot.Position)
+                cam.CFrame = cam.CFrame:Lerp(goal, S.CamLockSmooth)
+            end
+        end
+    else
+        camTarget = nil
+    end
+end))
+
+-- --- Анти-АФК ---
+track(LocalPlayer.Idled:Connect(function()
+    if S.AntiAFK then
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new())
+        end)
+    end
+end))
+
+-- --- Телепорт к игроку ---
+local function teleportTo(plr)
+    local myRoot = getRoot()
+    local char = plr.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if myRoot and root then
+        myRoot.CFrame = root.CFrame * CFrame.new(0, 0, 4)
+        return true
+    end
+    return false
+end
+
+-- Очистка при выгрузке скрипта
+onCleanup(function()
+    S.Fly = false
+    stopFly()
+    applyFullbright(false)
+    local hum = getHum()
+    if hum then
+        if S.Speed then hum.WalkSpeed = 16 end
+        if S.Jump then hum.JumpPower = 50 end
+    end
+    if S.FOVOn and Workspace.CurrentCamera then
+        Workspace.CurrentCamera.FieldOfView = 70
+    end
+    for plr in pairs(espData) do removeESP(plr) end
+end)
+
+-- ========== ПЕРЕТАСКИВАНИЕ ==========
+-- handle — за что тянем, target — что двигаем, onTap — короткое нажатие без движения
+local function makeDraggable(handle, target, onTap, scaleObj)
+    local dragging, moved = false, false
+    local startPos, startInput
+
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging, moved = true, false
+            startPos = target.Position
+            startInput = input.Position
+            local conn
+            conn = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    conn:Disconnect()
+                    if not moved and onTap then onTap() end
+                end
+            end)
+        end
+    end)
+
+    track(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - startInput
+            if delta.Magnitude > 8 then moved = true end
+            if moved then
+                local s = scaleObj and scaleObj.Scale or 1
+                target.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X / s,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y / s
+                )
+            end
+        end
+    end))
+end
+
+-- ========== ГЛАВНОЕ МЕНЮ ==========
+local function BuildMenu(device)
+    local isPhone = (device == "phone")
+    local ROW = isPhone and 46 or 34
+    local TXT = isPhone and 16 or 14
+    local W, H = 540, 310
+
+    local main = new("Frame", {
+        Name = "Main",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.new(0, W, 0, H),
+        BackgroundColor3 = C.bg,
+        BorderSizePixel = 0,
+        Visible = false,
+        ClipsDescendants = true,
+        ZIndex = 5,
+    }, gui)
+    corner(main, 14)
+    stroke(main, C.accent, 1.5, 0.35)
+    local uiscale = new("UIScale", { Scale = 1 }, main)
+
+    -- Подгонка размера под экран
+    local fit = 1
+    local function refit()
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+        local vp = cam.ViewportSize
+        fit = math.clamp(math.min((vp.X - 20) / W, (vp.Y - 20) / H), 0.45, 1)
+        if main.Visible then uiscale.Scale = fit end
+    end
+    refit()
+    if Workspace.CurrentCamera then
+        track(Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(refit))
+    end
+
+    -- Верхняя панель
+    local top = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 42),
+        BackgroundColor3 = C.panel,
+        BorderSizePixel = 0,
+    }, main)
+
+    -- Мини-логотип
+    local mini = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 24, 0, 21),
+        Size = UDim2.new(0, 22, 0, 22),
+        BackgroundTransparency = 1,
+    }, top)
+    for i = 0, 2 do
+        local b = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0.16, 0, 1, 0),
+            BackgroundColor3 = C.accent,
+            BorderSizePixel = 0,
+            Rotation = i * 60,
+        }, mini)
+        corner(b, 100)
+    end
+
+    new("TextLabel", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 46, 0, 0),
+        Size = UDim2.new(0, 180, 1, 0),
+        Text = 'CLAUDE <font color="rgb(217,119,87)" size="12">TSB</font>',
+        RichText = true,
+        TextColor3 = C.text,
+        Font = Enum.Font.GothamBlack,
+        TextSize = 18,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, top)
+
+    local statsLbl = new("TextLabel", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -56, 0.5, 0),
+        Size = UDim2.new(0, 140, 0, 20),
+        BackgroundTransparency = 1,
+        Text = "-- FPS",
+        TextColor3 = C.dim,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    }, top)
+
+    local minBtn = new("TextButton", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -10, 0.5, 0),
+        Size = UDim2.new(0, 38, 0, 30),
+        BackgroundColor3 = C.item,
+        Text = "—",
+        TextColor3 = C.text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 18,
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+    }, top)
+    corner(minBtn, 8)
+
+    makeDraggable(top, main, nil, uiscale)
+
+    -- FPS / пинг
+    local frames, acc = 0, 0
+    track(RunService.Heartbeat:Connect(function(dt)
+        frames += 1
+        acc += dt
+        if acc >= 0.5 then
+            local fps = math.floor(frames / acc + 0.5)
+            local ping = 0
+            pcall(function()
+                ping = math.floor(StatsService.Network.ServerStatsItem["Data Ping"]:GetValue())
+            end)
+            statsLbl.Text = fps .. " FPS | " .. ping .. " ms"
+            frames, acc = 0, 0
+        end
+    end))
+
+    -- Боковая панель вкладок
+    local tabH = isPhone and 42 or 34
+    local sidebar = new("Frame", {
+        Position = UDim2.new(0, 0, 0, 42),
+        Size = UDim2.new(0, 124, 1, -42),
+        BackgroundColor3 = C.panel,
+        BorderSizePixel = 0,
+    }, main)
+    new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, sidebar)
+    new("UIPadding", {
+        PaddingTop = UDim.new(0, 8),
+        PaddingLeft = UDim.new(0, 8),
+        PaddingRight = UDim.new(0, 8),
+    }, sidebar)
+
+    local holder = new("Frame", {
+        Position = UDim2.new(0, 132, 0, 50),
+        Size = UDim2.new(1, -140, 1, -58),
+        BackgroundTransparency = 1,
+    }, main)
+
+    local tabNames = { "Движение", "Визуал", "Бой", "Игроки", "Прочее" }
+    local pages, tabBtns = {}, {}
+
+    local function setTab(name)
+        for n, page in pairs(pages) do
+            local active = (n == name)
+            if active and not page.Visible then
+                page.Position = UDim2.new(0, 14, 0, 0)
+                page.Visible = true
+                tween(page, 0.3, { Position = UDim2.new(0, 0, 0, 0) })
+            elseif not active then
+                page.Visible = false
+            end
+            tween(tabBtns[n], 0.2, {
+                BackgroundColor3 = active and C.accent or C.panel,
+                TextColor3 = active and Color3.new(1, 1, 1) or C.dim,
+            })
+        end
+    end
+
+    for i, name in ipairs(tabNames) do
+        local btn = new("TextButton", {
+            Size = UDim2.new(1, 0, 0, tabH),
+            BackgroundColor3 = C.panel,
+            Text = name,
+            TextColor3 = C.dim,
+            Font = Enum.Font.GothamBold,
+            TextSize = TXT - 1,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            LayoutOrder = i,
+        }, sidebar)
+        corner(btn, 8)
+        tabBtns[name] = btn
+
+        local page = new("ScrollingFrame", {
+            Name = name,
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ScrollBarThickness = isPhone and 4 or 3,
+            ScrollBarImageColor3 = C.accent,
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            CanvasSize = UDim2.new(0, 0, 0, 0),
+            ScrollingDirection = Enum.ScrollingDirection.Y,
+            Visible = false,
+        }, holder)
+        new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+        new("UIPadding", { PaddingRight = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, page)
+        pages[name] = page
+
+        btn.MouseButton1Click:Connect(function() setTab(name) end)
+    end
+
+    -- ---------- Компоненты ----------
+    local function section(page, text)
+        new("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 22),
+            BackgroundTransparency = 1,
+            Text = text,
+            TextColor3 = C.accent,
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = ord(page),
+        }, page)
+    end
+
+    local function note(page, text)
+        new("TextLabel", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            Text = text,
+            TextColor3 = C.dim,
+            Font = Enum.Font.Gotham,
+            TextSize = 12,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = ord(page),
+        }, page)
+    end
+
+    local function toggle(page, text, default, cb)
+        local row = new("TextButton", {
+            Size = UDim2.new(1, 0, 0, ROW),
+            BackgroundColor3 = C.item,
+            AutoButtonColor = false,
+            Text = "",
+            BorderSizePixel = 0,
+            LayoutOrder = ord(page),
+        }, page)
+        corner(row, 8)
+        new("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 12, 0, 0),
+            Size = UDim2.new(1, -70, 1, 0),
+            Text = text,
+            TextColor3 = C.text,
+            Font = Enum.Font.GothamMedium,
+            TextSize = TXT,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, row)
+        local pill = new("Frame", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -10, 0.5, 0),
+            Size = UDim2.new(0, 44, 0, 24),
+            BackgroundColor3 = C.off,
+            BorderSizePixel = 0,
+        }, row)
+        corner(pill, 12)
+        local knob = new("Frame", {
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 3, 0.5, 0),
+            Size = UDim2.new(0, 18, 0, 18),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BorderSizePixel = 0,
+        }, pill)
+        corner(knob, 9)
+
+        local state = default and true or false
+        local function render(anim)
+            local pc = state and C.accent or C.off
+            local kp = state and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+            if anim then
+                tween(pill, 0.2, { BackgroundColor3 = pc })
+                tween(knob, 0.25, { Position = kp }, Enum.EasingStyle.Back)
+            else
+                pill.BackgroundColor3 = pc
+                knob.Position = kp
+            end
+        end
+        render(false)
+
+        row.MouseButton1Click:Connect(function()
+            state = not state
+            render(true)
+            pcall(cb, state)
+            notify(text .. (state and ": ВКЛ" or ": ВЫКЛ"))
+        end)
+    end
+
+    local function slider(page, text, min, max, default, cb, suffix)
+        local h = ROW + 20
+        local row = new("Frame", {
+            Size = UDim2.new(1, 0, 0, h),
+            BackgroundColor3 = C.item,
+            BorderSizePixel = 0,
+            LayoutOrder = ord(page),
+        }, page)
+        corner(row, 8)
+        new("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 12, 0, 6),
+            Size = UDim2.new(1, -90, 0, 18),
+            Text = text,
+            TextColor3 = C.text,
+            Font = Enum.Font.GothamMedium,
+            TextSize = TXT - 1,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, row)
+        local val = new("TextLabel", {
+            AnchorPoint = Vector2.new(1, 0),
+            BackgroundTransparency = 1,
+            Position = UDim2.new(1, -12, 0, 6),
+            Size = UDim2.new(0, 70, 0, 18),
+            Text = "",
+            TextColor3 = C.accent2,
+            Font = Enum.Font.GothamBold,
+            TextSize = TXT - 1,
+            TextXAlignment = Enum.TextXAlignment.Right,
+        }, row)
+
+        -- Увеличенная область нажатия для пальца
+        local hitH = isPhone and 30 or 24
+        local hit = new("TextButton", {
+            Text = "",
+            BackgroundTransparency = 1,
+            AutoButtonColor = false,
+            Position = UDim2.new(0, 6, 1, -(hitH + 4)),
+            Size = UDim2.new(1, -12, 0, hitH),
+        }, row)
+        local bar = new("Frame", {
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 6, 0.5, 0),
+            Size = UDim2.new(1, -12, 0, 6),
+            BackgroundColor3 = C.off,
+            BorderSizePixel = 0,
+        }, hit)
+        corner(bar, 3)
+        local fill = new("Frame", {
+            Size = UDim2.new(0, 0, 1, 0),
+            BackgroundColor3 = C.accent,
+            BorderSizePixel = 0,
+        }, bar)
+        corner(fill, 3)
+        local knob = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(1, 0, 0.5, 0),
+            Size = UDim2.new(0, 16, 0, 16),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BorderSizePixel = 0,
+        }, fill)
+        corner(knob, 8)
+
+        local value = default
+        local function render()
+            fill.Size = UDim2.new((value - min) / (max - min), 0, 1, 0)
+            val.Text = tostring(value) .. (suffix or "")
+        end
+
+        local dragging = false
+        local function setFromX(x)
+            local a = math.clamp((x - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+            value = math.floor(min + (max - min) * a + 0.5)
+            render()
+            pcall(cb, value)
+        end
+
+        hit.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                page.ScrollingEnabled = false -- чтобы страница не прокручивалась при движении ползунка
+                setFromX(input.Position.X)
+            end
+        end)
+        track(UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch) then
+                setFromX(input.Position.X)
+            end
+        end))
+        track(UserInputService.InputEnded:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch) then
+                dragging = false
+                page.ScrollingEnabled = true
+            end
+        end))
+        render()
+    end
+
+    local function button(page, text, cb, danger)
+        local b = new("TextButton", {
+            Size = UDim2.new(1, 0, 0, ROW),
+            BackgroundColor3 = danger and C.danger or C.item,
+            Text = text,
+            TextColor3 = C.text,
+            Font = Enum.Font.GothamBold,
+            TextSize = TXT,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            LayoutOrder = ord(page),
+        }, page)
+        corner(b, 8)
+        b.MouseButton1Click:Connect(function()
+            local orig = b.BackgroundColor3
+            b.BackgroundColor3 = C.accent
+            tween(b, 0.3, { BackgroundColor3 = orig })
+            pcall(cb)
+        end)
+        return b
+    end
+
+    -- ---------- Вкладка: Движение ----------
+    local P1 = pages["Движение"]
+    section(P1, "СКОРОСТЬ И ПРЫЖОК")
+    toggle(P1, "Скорость бега", false, function(v)
+        S.Speed = v
+        if not v then
+            local hum = getHum()
+            if hum then hum.WalkSpeed = 16 end
+        end
+    end)
+    slider(P1, "Значение скорости", 16, 120, S.SpeedValue, function(v) S.SpeedValue = v end)
+    toggle(P1, "Сила прыжка", false, function(v)
+        S.Jump = v
+        if not v then
+            local hum = getHum()
+            if hum then hum.JumpPower = 50 end
+        end
+    end)
+    slider(P1, "Значение прыжка", 50, 200, S.JumpValue, function(v) S.JumpValue = v end)
+    toggle(P1, "Бесконечный прыжок", false, function(v) S.InfJump = v end)
+    toggle(P1, "Ноклип (сквозь стены)", false, function(v) S.Noclip = v end)
+    section(P1, "ПОЛЁТ")
+    toggle(P1, "Полёт", false, function(v) setFly(v) end)
+    slider(P1, "Скорость полёта", 20, 200, S.FlySpeed, function(v) S.FlySpeed = v end)
+    note(P1, "Полёт: направление задаёт джойстик и взгляд камеры. На телефоне появятся кнопки ВВЕРХ / ВНИЗ, на ПК — Space / Ctrl.")
+
+    -- ---------- Вкладка: Визуал ----------
+    local P2 = pages["Визуал"]
+    section(P2, "ESP")
+    toggle(P2, "ESP игроков", false, function(v) S.ESP = v end)
+    toggle(P2, "Имя / дистанция / HP", true, function(v) S.ESPInfo = v end)
+    section(P2, "КАМЕРА И СВЕТ")
+    toggle(P2, "Фулбрайт (без темноты)", false, function(v)
+        S.Fullbright = v
+        applyFullbright(v)
+    end)
+    toggle(P2, "Свой FOV", false, function(v)
+        S.FOVOn = v
+        if not v and Workspace.CurrentCamera then
+            Workspace.CurrentCamera.FieldOfView = 70
+        end
+    end)
+    slider(P2, "Значение FOV", 40, 120, S.FOV, function(v) S.FOV = v end)
+
+    -- ---------- Вкладка: Бой ----------
+    local P3 = pages["Бой"]
+    section(P3, "КАМЕРА-ЗАХВАТ")
+    toggle(P3, "Захват ближайшего игрока", false, function(v) S.CamLock = v end)
+    slider(P3, "Дальность захвата", 20, 150, S.CamLockRange, function(v) S.CamLockRange = v end, " st")
+    slider(P3, "Скорость наведения", 5, 100, 30, function(v) S.CamLockSmooth = v / 100 end, "%")
+    note(P3, "Авто-блок, авто-диалог и прочие боевые функции требуют RemoteEvent самой игры. Пришли данные из SimpleSpy, и я допишу их под TSB.")
+
+    -- ---------- Вкладка: Игроки ----------
+    local P4 = pages["Игроки"]
+    local listHolder
+    local function refreshPlayers()
+        if not listHolder then return end
+        for _, ch in ipairs(listHolder:GetChildren()) do
+            if not ch:IsA("UIListLayout") then ch:Destroy() end
+        end
+        local n = 0
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                n += 1
+                local b = new("TextButton", {
+                    Size = UDim2.new(1, 0, 0, ROW),
+                    BackgroundColor3 = C.item,
+                    AutoButtonColor = false,
+                    Text = plr.DisplayName .. " (@" .. plr.Name .. ")",
+                    TextColor3 = C.text,
+                    Font = Enum.Font.GothamMedium,
+                    TextSize = TXT - 1,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    BorderSizePixel = 0,
+                    LayoutOrder = n,
+                }, listHolder)
+                corner(b, 8)
+                b.MouseButton1Click:Connect(function()
+                    if teleportTo(plr) then
+                        notify("Телепорт к " .. plr.DisplayName)
+                    else
+                        notify("Игрок недоступен")
+                    end
+                end)
+            end
+        end
+        if n == 0 then
+            new("TextLabel", {
+                Size = UDim2.new(1, 0, 0, 30),
+                BackgroundTransparency = 1,
+                Text = "Других игроков нет",
+                TextColor3 = C.dim,
+                Font = Enum.Font.Gotham,
+                TextSize = 13,
+                LayoutOrder = 1,
+            }, listHolder)
+        end
+    end
+
+    section(P4, "ТЕЛЕПОРТ К ИГРОКУ")
+    button(P4, "Обновить список", refreshPlayers)
+    listHolder = new("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = ord(P4),
+    }, P4)
+    new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, listHolder)
+    refreshPlayers()
+    track(Players.PlayerAdded:Connect(function() task.delay(0.5, refreshPlayers) end))
+    track(Players.PlayerRemoving:Connect(function() task.delay(0.2, refreshPlayers) end))
+
+    -- ---------- Вкладка: Прочее ----------
+    local P5 = pages["Прочее"]
+    section(P5, "ОБЩЕЕ")
+    toggle(P5, "Анти-АФК", true, function(v) S.AntiAFK = v end)
+    button(P5, "Перезайти на сервер", function()
+        notify("Перезаход...")
+        pcall(function()
+            if #Players:GetPlayers() <= 1 then
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            else
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+            end
+        end)
+    end)
+    button(P5, "Скопировать ID сервера", function()
+        if setclipboard then
+            local ok = pcall(setclipboard, game.JobId)
+            notify(ok and "ID сервера скопирован" or "Не удалось скопировать")
+        else
+            notify("setclipboard не поддерживается")
+        end
+    end)
+    button(P5, "Выгрузить скрипт", function()
+        notify("Claude выгружен")
+        task.delay(0.6, function() Claude.Unload() end)
+    end, true)
+
+    -- ---------- Кнопки полёта для телефона ----------
+    local flyPad = new("Frame", {
+        Name = "FlyPad",
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -18, 0.5, 0),
+        Size = UDim2.new(0, 84, 0, 170),
+        BackgroundTransparency = 1,
+        Visible = false,
+        ZIndex = 8,
+    }, gui)
+
+    local function holdButton(text, y, onChange)
+        local b = new("TextButton", {
+            Position = UDim2.new(0, 0, 0, y),
+            Size = UDim2.new(1, 0, 0, 78),
+            BackgroundColor3 = C.panel,
+            BackgroundTransparency = 0.15,
+            Text = text,
+            TextColor3 = C.text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 14,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            ZIndex = 8,
+        }, flyPad)
+        corner(b, 14)
+        stroke(b, C.accent, 2, 0.1)
+        b.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                onChange(true)
+                tween(b, 0.1, { BackgroundColor3 = C.accent })
+            end
+        end)
+        b.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch
+                or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                onChange(false)
+                tween(b, 0.2, { BackgroundColor3 = C.panel })
+            end
+        end)
+    end
+    holdButton("ВВЕРХ", 0, function(v) flyBtnUp = v end)
+    holdButton("ВНИЗ", 92, function(v) flyBtnDown = v end)
+
+    Claude.SetFlyPad = function(v)
+        flyPad.Visible = (v and isPhone) and true or false
+        if not v then flyBtnUp, flyBtnDown = false, false end
+    end
+
+    -- ---------- Плавающая кнопка открытия/скрытия ----------
+    local fabSize = isPhone and 56 or 46
+    local fab = new("TextButton", {
+        Name = "ToggleButton",
+        Size = UDim2.new(0, fabSize, 0, fabSize),
+        Position = UDim2.new(0, 14, 0.35, 0),
+        BackgroundColor3 = C.accent,
+        Text = "",
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+        ZIndex = 10,
+    }, gui)
+    corner(fab, 100)
+    stroke(fab, Color3.new(1, 1, 1), 2, 0.55)
+    local fabLogo = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.new(0.5, 0, 0.5, 0),
+        BackgroundTransparency = 1,
+        ZIndex = 11,
+    }, fab)
+    for i = 0, 2 do
+        local b = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0.16, 0, 1, 0),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BorderSizePixel = 0,
+            Rotation = i * 60,
+            ZIndex = 11,
+        }, fabLogo)
+        corner(b, 100)
+    end
+
+    -- Открытие / закрытие меню с анимацией
+    local isOpen = false
+    local function setOpen(v)
+        isOpen = v
+        tween(fabLogo, 0.35, { Rotation = fabLogo.Rotation + 120 }, Enum.EasingStyle.Back)
+        if v then
+            refit()
+            main.Visible = true
+            uiscale.Scale = fit * 0.8
+            tween(uiscale, 0.3, { Scale = fit }, Enum.EasingStyle.Back)
+        else
+            tween(uiscale, 0.18, { Scale = fit * 0.8 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+            task.delay(0.19, function()
+                if not isOpen and main.Parent then main.Visible = false end
+            end)
+        end
+    end
+    Claude.ToggleMenu = function() setOpen(not isOpen) end
+
+    makeDraggable(fab, fab, function() setOpen(not isOpen) end)
+    minBtn.MouseButton1Click:Connect(function() setOpen(false) end)
+
+    setTab("Движение")
+
+    return { Open = function() setOpen(true) end }
+end
+
+-- ========== ИНТРО + ВЫБОР УСТРОЙСТВА + ЛОАДЕР ==========
+local function RunSequence()
+    local splash = new("CanvasGroup", {
+        Name = "Splash",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        GroupTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 50,
+    }, gui)
+
+    -- Фон с градиентом
+    local bg = new("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+        ZIndex = 1,
+    }, splash)
+    new("UIGradient", {
+        Rotation = 90,
+        Color = ColorSequence.new(Color3.fromRGB(26, 18, 24), Color3.fromRGB(8, 8, 12)),
+    }, bg)
+
+    -- Контент фиксированного размера 640x360, масштабируется под экран
+    local content = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.new(0, 640, 0, 360),
+        BackgroundTransparency = 1,
+        ZIndex = 2,
+    }, splash)
+    local csc = new("UIScale", { Scale = 1 }, content)
+    local function fitSplash()
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+        local vp = cam.ViewportSize
+        csc.Scale = math.clamp(math.min(vp.X / 680, vp.Y / 390), 0.45, 1.3)
+    end
+    fitSplash()
+    if Workspace.CurrentCamera then
+        track(Workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fitSplash))
+    end
+
+    -- Логотип (3 капсулы = 6 лучей)
+    local logo = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 320, 0, 150),
+        Size = UDim2.new(0, 0, 0, 0),
+        BackgroundTransparency = 1,
+        Rotation = -90,
+    }, content)
+    for i = 0, 2 do
+        local b = new("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.new(0.15, 0, 1, 0),
+            BackgroundColor3 = C.accent,
+            BorderSizePixel = 0,
+            Rotation = i * 60,
+        }, logo)
+        corner(b, 100)
+    end
+
+    local title = new("TextLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 320, 0, 228),
+        Size = UDim2.new(0, 400, 0, 48),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = C.text,
+        Font = Enum.Font.GothamBlack,
+        TextSize = 44,
+    }, content)
+
+    local sub = new("TextLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 320, 0, 266),
+        Size = UDim2.new(0, 460, 0, 20),
+        BackgroundTransparency = 1,
+        Text = "THE STRONGEST BATTLEGROUNDS  |  SCRIPT HUB",
+        TextColor3 = C.accent2,
+        TextTransparency = 1,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 13,
+    }, content)
+
+    -- ---- ИНТРО ----
+    tween(splash, 0.5, { GroupTransparency = 0 }, Enum.EasingStyle.Quad)
+    task.wait(0.35)
+    tween(logo, 0.9, { Size = UDim2.new(0, 90, 0, 90), Rotation = 0 }, Enum.EasingStyle.Back)
+    task.wait(0.8)
+
+    -- Бесконечное медленное вращение логотипа
+    local spin = TweenService:Create(
+        logo,
+        TweenInfo.new(10, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1),
+        { Rotation = 360 }
+    )
+    spin:Play()
+
+    -- Печать названия по буквам
+    local word = "CLAUDE"
+    for i = 1, #word do
+        title.Text = string.sub(word, 1, i)
+        task.wait(0.11)
+    end
+    tween(sub, 0.6, { TextTransparency = 0 }, Enum.EasingStyle.Quad)
+    task.wait(1)
+
+    -- Логотип и заголовок уезжают вверх
+    tween(logo, 0.8, { Position = UDim2.new(0, 320, 0, 52), Size = UDim2.new(0, 52, 0, 52) })
+    tween(title, 0.8, { Position = UDim2.new(0, 320, 0, 98) })
+    tween(sub, 0.8, { Position = UDim2.new(0, 320, 0, 134) })
+    task.wait(0.5)
+
+    -- ---- ВЫБОР УСТРОЙСТВА ----
+    tween(sub, 0.2, { TextTransparency = 1 }, Enum.EasingStyle.Quad)
+    task.wait(0.2)
+    sub.Text = "ВЫБЕРИ СВОЁ УСТРОЙСТВО"
+    tween(sub, 0.3, { TextTransparency = 0 }, Enum.EasingStyle.Quad)
+
+    local cards = new("CanvasGroup", {
+        Size = UDim2.new(0, 640, 0, 360),
+        Position = UDim2.new(0, 0, 0, 24),
+        BackgroundTransparency = 1,
+        GroupTransparency = 1,
+    }, content)
+
+    local recommended = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) and "phone" or "pc"
+    local chosen = nil
+
+    -- Рисуем иконку устройства из обычных Frame (без внешних картинок)
+    local function drawIcon(parent, kind)
+        local cx = 110
+        if kind == "pc" then
+            local mon = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0, cx, 0, 40),
+                Size = UDim2.new(0, 92, 0, 58),
+                BackgroundColor3 = C.item,
+                BorderSizePixel = 0,
+            }, parent)
+            corner(mon, 7)
+            stroke(mon, C.accent, 3)
+            local scr = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0.5, 0, 0.5, 0),
+                Size = UDim2.new(1, -14, 1, -14),
+                BackgroundColor3 = C.accent,
+                BackgroundTransparency = 0.82,
+                BorderSizePixel = 0,
+            }, mon)
+            corner(scr, 3)
+            for i = 1, 3 do
+                local l = new("Frame", {
+                    Position = UDim2.new(0, 6, 0, 5 + (i - 1) * 9),
+                    Size = UDim2.new(i == 2 and 0.45 or 0.7, 0, 0, 4),
+                    BackgroundColor3 = C.accent,
+                    BorderSizePixel = 0,
+                }, scr)
+                corner(l, 2)
+            end
+            local stand = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0, cx, 0, 76),
+                Size = UDim2.new(0, 10, 0, 12),
+                BackgroundColor3 = C.accent,
+                BorderSizePixel = 0,
+            }, parent)
+            local base = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0, cx, 0, 85),
+                Size = UDim2.new(0, 46, 0, 5),
+                BackgroundColor3 = C.accent,
+                BorderSizePixel = 0,
+            }, parent)
+            corner(base, 3)
+        else
+            local body = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(0, cx, 0, 48),
+                Size = UDim2.new(0, 48, 0, 84),
+                BackgroundColor3 = C.item,
+                BorderSizePixel = 0,
+            }, parent)
+            corner(body, 10)
+            stroke(body, C.accent, 3)
+            local notch = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0),
+                Position = UDim2.new(0.5, 0, 0, 5),
+                Size = UDim2.new(0, 16, 0, 4),
+                BackgroundColor3 = C.accent,
+                BorderSizePixel = 0,
+            }, body)
+            corner(notch, 2)
+            for i = 1, 3 do
+                local l = new("Frame", {
+                    Position = UDim2.new(0, 8, 0, 18 + (i - 1) * 11),
+                    Size = UDim2.new(i == 2 and 0.4 or 0.7, 0, 0, 5),
+                    BackgroundColor3 = C.accent,
+                    BackgroundTransparency = 0.3,
+                    BorderSizePixel = 0,
+                }, body)
+                corner(l, 2)
+            end
+            local home = new("Frame", {
+                AnchorPoint = Vector2.new(0.5, 1),
+                Position = UDim2.new(0.5, 0, 1, -5),
+                Size = UDim2.new(0, 18, 0, 3),
+                BackgroundColor3 = C.accent,
+                BorderSizePixel = 0,
+            }, body)
+            corner(home, 2)
+        end
+    end
+
+    local function makeCard(centerX, kind, name, hint)
+        local card = new("TextButton", {
+            AnchorPoint = Vector2.new(0.5, 0),
+            Position = UDim2.new(0, centerX, 0, 140),
+            Size = UDim2.new(0, 220, 0, 176),
+            BackgroundColor3 = C.panel,
+            Text = "",
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+        }, cards)
+        corner(card, 16)
+        local st = stroke(card, C.off, 2)
+
+        local iconHolder = new("Frame", {
+            Position = UDim2.new(0, 0, 0, 8),
+            Size = UDim2.new(1, 0, 0, 96),
+            BackgroundTransparency = 1,
+        }, card)
+        drawIcon(iconHolder, kind)
+
+        new("TextLabel", {
+            Position = UDim2.new(0, 0, 0, 108),
+            Size = UDim2.new(1, 0, 0, 24),
+            BackgroundTransparency = 1,
+            Text = name,
+            TextColor3 = C.text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 20,
+        }, card)
+        new("TextLabel", {
+            Position = UDim2.new(0, 10, 0, 134),
+            Size = UDim2.new(1, -20, 0, 34),
+            BackgroundTransparency = 1,
+            Text = hint,
+            TextColor3 = C.dim,
+            Font = Enum.Font.Gotham,
+            TextSize = 12,
+            TextWrapped = true,
+        }, card)
+
+        if kind == recommended then
+            local tag = new("TextLabel", {
+                AnchorPoint = Vector2.new(1, 0),
+                Position = UDim2.new(1, -8, 0, 8),
+                Size = UDim2.new(0, 92, 0, 18),
+                BackgroundColor3 = C.accent,
+                Text = "РЕКОМЕНДУЕМ",
+                TextColor3 = Color3.new(1, 1, 1),
+                Font = Enum.Font.GothamBold,
+                TextSize = 10,
+                BorderSizePixel = 0,
+            }, card)
+            corner(tag, 9)
+        end
+
+        card.MouseEnter:Connect(function()
+            tween(st, 0.2, { Color = C.accent })
+            tween(card, 0.2, { BackgroundColor3 = C.item })
+        end)
+        card.MouseLeave:Connect(function()
+            if chosen ~= kind then
+                tween(st, 0.2, { Color = C.off })
+                tween(card, 0.2, { BackgroundColor3 = C.panel })
+            end
+        end)
+        card.MouseButton1Click:Connect(function()
+            if chosen then return end
+            chosen = kind
+            tween(st, 0.2, { Color = C.accent2, Thickness = 3 })
+            tween(card, 0.2, { BackgroundColor3 = C.item })
+        end)
+    end
+
+    makeCard(198, "pc", "ПК", "Компактное меню, клавиша RightShift для скрытия")
+    makeCard(442, "phone", "ТЕЛЕФОН", "Крупные кнопки, плавающая кнопка и кнопки полёта")
+
+    tween(cards, 0.6, { GroupTransparency = 0, Position = UDim2.new(0, 0, 0, 0) })
+
+    -- Ждём выбор пользователя
+    while not chosen and Claude.Gui do
+        task.wait(0.05)
+    end
+    if not Claude.Gui then return end
+
+    local device = chosen
+    local deviceName = (device == "phone") and "Телефон" or "ПК"
+    task.wait(0.4)
+    tween(cards, 0.4, { GroupTransparency = 1 }, Enum.EasingStyle.Quad)
+    tween(sub, 0.3, { TextTransparency = 1 }, Enum.EasingStyle.Quad)
+    task.wait(0.45)
+    cards:Destroy()
+
+    -- ---- ЛОАДЕР ----
+    local loader = new("CanvasGroup", {
+        Size = UDim2.new(0, 640, 0, 360),
+        BackgroundTransparency = 1,
+        GroupTransparency = 1,
+    }, content)
+
+    local status = new("TextLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 320, 0, 250),
+        Size = UDim2.new(0, 360, 0, 22),
+        BackgroundTransparency = 1,
+        Text = "Подготовка...",
+        TextColor3 = C.text,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 15,
+    }, loader)
+
+    local barBg = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 320, 0, 284),
+        Size = UDim2.new(0, 320, 0, 8),
+        BackgroundColor3 = C.item,
+        BorderSizePixel = 0,
+    }, loader)
+    corner(barBg, 4)
+    local fill = new("Frame", {
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+    }, barBg)
+    corner(fill, 4)
+    new("UIGradient", { Color = ColorSequence.new(C.accent, C.accent2) }, fill)
+
+    local pct = new("TextLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 320, 0, 310),
+        Size = UDim2.new(0, 100, 0, 18),
+        BackgroundTransparency = 1,
+        Text = "0%",
+        TextColor3 = C.dim,
+        Font = Enum.Font.GothamBold,
+        TextSize = 13,
+    }, loader)
+
+    tween(loader, 0.4, { GroupTransparency = 0 }, Enum.EasingStyle.Quad)
+    task.wait(0.3)
+
+    local shown = 0
+    local function advance(target, text, dur)
+        status.Text = text
+        tween(fill, dur, { Size = UDim2.new(target / 100, 0, 1, 0) }, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+        local steps = math.max(target - shown, 1)
+        for p = shown + 1, target do
+            pct.Text = p .. "%"
+            task.wait(dur / steps)
+        end
+        shown = target
+    end
+
+    advance(18, "Загрузка ассетов...", 0.7)
+    advance(42, "Загрузка функций...", 0.7)
+
+    -- Реальная сборка меню под выбранное устройство
+    local menu = nil
+    status.Text = "Сборка интерфейса: " .. deviceName .. "..."
+    local okBuild, res = pcall(BuildMenu, device)
+    if okBuild then
+        menu = res
+    else
+        warn("[Claude] Ошибка сборки меню: " .. tostring(res))
+    end
+    advance(72, "Сборка интерфейса: " .. deviceName .. "...", 0.6)
+
+    -- Ждём персонажа (максимум 3 секунды)
+    status.Text = "Проверка персонажа..."
+    local t0 = os.clock()
+    while not getRoot() and os.clock() - t0 < 3 do
+        task.wait(0.1)
+    end
+    advance(90, "Проверка персонажа...", 0.4)
+    advance(100, "Готово!", 0.4)
+    task.wait(0.4)
+
+    -- Плавное исчезновение лоадера
+    tween(splash, 0.7, { GroupTransparency = 1 }, Enum.EasingStyle.Quad)
+    task.wait(0.75)
+    spin:Cancel()
+    splash:Destroy()
+
+    if menu then
+        menu.Open()
+        notify("Claude загружен | " .. deviceName)
+    else
+        notify("Ошибка сборки меню, смотри консоль")
+    end
+end
+
+-- ========== ЗАПУСК ==========
+task.spawn(function()
+    local ok, err = pcall(RunSequence)
+    if not ok then
+        warn("[Claude] Ошибка: " .. tostring(err))
+    end
+end)
